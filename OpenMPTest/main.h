@@ -6,18 +6,24 @@
 #define MAX_ITER 100
 #define EPSILON 1e-6
 #define MASTER 0
+#define FILE_NAME "result.txt"
 
-void print_matrix(double** matrix, int rows, int cols) {
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            printf("%8.3f ", matrix[i][j]);
+void print_matrix(double** matrix, int rows, int cols, FILE* file) {
+   
+    int i,j;
+    for (i = 0; i < rows; i++) {
+        for (j = 0; j < cols; j++) {
+            fprintf(file, "%8.3f ", matrix[i][j]);
         }
-        printf("\n");
+        fprintf(file, "\n");
     }
+    fprintf(file, "\n---------------------------------------------------------------\n");
+    
 }
 
-double* print_solution_and_get(double** tableau, double* basics, int rows, int cols) {
-    printf("Solution:\n");
+double* print_solution_and_get(double** tableau, double* basics, int rows, int cols, FILE* file) {
+   
+    fprintf(file,"Solution:\n");
 
     int basics_length = rows - 1;
     double* solution = (double*)calloc(basics_length, sizeof(double));
@@ -29,16 +35,13 @@ double* print_solution_and_get(double** tableau, double* basics, int rows, int c
     for (int i = 0; i < basics_length; i++) {
         int xCol = (int)basics[i];
 
-        if (xCol >= 0 && xCol < cols) {
+        if (xCol != -1) {
             solution[xCol] = tableau[i][cols - 1];
-        }
-        else {
-            fprintf(stderr, "Warning: Invalid column index basics[%d] = %d\n", i, xCol);
         }
     }
 
     for (int i = 0; i < basics_length; i++) {
-        printf("x%d = %.2f\n", i + 1, solution[i]);
+        fprintf(file,"x%d = %.2f\n", i + 1, solution[i]);
     }
 
     return solution;
@@ -161,18 +164,27 @@ void pivot(double** tableau, int rows, int cols, int pivot_row, int pivot_col) {
     int j, i;
 #pragma omp parallel for
     for (j = 0; j < cols; j++) {
-        tableau[pivot_row][j] /= pivot_value;
+        double value = tableau[pivot_row][j] / pivot_value;
+        if (value == 0) {
+            tableau[pivot_row][j] = 0.0;
+        }
+        else {
+            tableau[pivot_row][j] = value;
+        }
+         
     }
 
 #pragma omp parallel for
-    for (i = 0; i < rows; i++) {
-        if (i != pivot_row) {
-            double factor = tableau[i][pivot_col];
-            for (int j = 0; j < cols; j++) {
-                tableau[i][j] -= factor * tableau[pivot_row][j];
-            }
-        }
-    }
+	for (i = 0; i < rows; i++) {
+		if (i != pivot_row) {
+			double factor = tableau[i][pivot_col];
+			for (int j = 0; j < cols; j++) {
+
+				tableau[i][j] -= factor * tableau[pivot_row][j];
+				
+			}
+		}
+	}
 }
 double** add_gomory_cut(double** tableau, int old_rows, int old_cols, int row_to_cut, int is_first_time) {
 
@@ -182,9 +194,10 @@ double** add_gomory_cut(double** tableau, int old_rows, int old_cols, int row_to
     int gomory_col = old_cols - 1;
 
     double** result = allocate_matrix(new_rows, new_cols);
-
-    for (int i = 0; i < gomory_row; i++) {
-        for (int j = 0; j < old_cols; j++) {
+    int i, j;
+#pragma omp parallel for default(none) private(i, j)
+    for (i = 0; i < gomory_row; i++) {
+        for (j = 0; j < old_cols; j++) {
             if (j == gomory_col) {
                 result[i][j] = 0.0;
             }
@@ -194,8 +207,8 @@ double** add_gomory_cut(double** tableau, int old_rows, int old_cols, int row_to
 
         }
     }
-
-    for (int j = 0; j < old_cols; j++) {
+#pragma omp parallel for default(none) private(j)
+    for (j = 0; j < old_cols; j++) {
         double value = tableau[row_to_cut][j];
         double fractionalPart = value - floor(value);
         if (j == gomory_col) {
@@ -206,8 +219,8 @@ double** add_gomory_cut(double** tableau, int old_rows, int old_cols, int row_to
         }
     }
 
-
-    for (int j = 0; j < old_cols; j++) {
+#pragma omp parallel for default(none) private(j)
+    for (j = 0; j < old_cols; j++) {
         double value = tableau[gomory_row][j];
         if (j == gomory_col) {
             result[old_rows][j] = 0.0;
@@ -223,8 +236,8 @@ double** add_gomory_cut(double** tableau, int old_rows, int old_cols, int row_to
         }
     }
 
-    //The last column of the extended tableau
-    for (int i = 0; i < new_rows; i++) {
+#pragma omp parallel for default(none) private(i)
+    for (i = 0; i < new_rows; i++) {
         if (i == gomory_row) {
             double value = tableau[row_to_cut][gomory_col];
             double fractionalPart = value - floor(value);
@@ -244,25 +257,29 @@ double** add_gomory_cut(double** tableau, int old_rows, int old_cols, int row_to
     return result;
 
 }
-void apply_gomory_cuts(double** tableau, int rows, int cols, double* basics) {
+void apply_gomory_cuts(double** tableau, int rows, int cols, double* basics, FILE* file) {
     int keep_apply_gomory_cut = exist_real_value(tableau, rows, cols);
     int is_first_time = 1;
-
+   
     if (keep_apply_gomory_cut) {
-        printf("\nApply Gomory\n");
+        fprintf(file,"\nApply Gomory\n");
     }
 
     while (keep_apply_gomory_cut) {
         int row_to_cut = find_gomory_row_to_cut(tableau, rows, cols);
         if (row_to_cut == -1) {
-            printf("All solutions are integers.\n");
+            fprintf(file,"All solutions are integers.\n");
             break;
         }
-        printf("Adding Gomory cut for row %d\n", row_to_cut);
+        if (row_to_cut == MAX_ITER) {
+            fprintf(file,"\nNot found solution after %d iterations ", MAX_ITER);
+            break;
+        }
+        fprintf(file,"Adding Gomory cut for row %d\n", row_to_cut);
         tableau = add_gomory_cut(tableau, rows, cols, row_to_cut, is_first_time);
         rows++;
         cols++;
-        print_matrix(tableau, rows, cols);
+        print_matrix(tableau, rows, cols,file);
 
         int gomory_row = rows - 2;
         int gomory_col = find_gomory_column_to_add(tableau, rows, cols);
@@ -271,19 +288,28 @@ void apply_gomory_cuts(double** tableau, int rows, int cols, double* basics) {
 
         pivot(tableau, rows, cols, gomory_row, gomory_col);
 
-        double* solution = print_solution_and_get(tableau, basics, rows, cols);
-        printf("-------------------------------------------------------------------\n");
+        double* solution = print_solution_and_get(tableau, basics, rows, cols,file);
+        fprintf(file,"-------------------------------------------------------------------\n");
         keep_apply_gomory_cut = exist_real_value(tableau, rows, cols);
         is_first_time = 0;
     }
-    print_matrix(tableau, rows, cols);
-    printf("-------------------------------------------------------------------\n");
+    print_matrix(tableau, rows, cols,file);
+    fprintf(file, "-------------------------------------------------------------------\n");
+}
+
+void init_basic(double* basics, int length) {
+    for (int i = 0; i < length; i++) {
+        basics[i] = -1;
+    }
 }
 
 
 // Perform Simplex method on the tableau
-int simplex_method(double** tableau, int rows, int cols) {
+int simplex_method(double** tableau, int rows, int cols, FILE* file) {
+  
     double* basics = (double*)malloc((rows - 1) * sizeof(double));
+
+    init_basic(basics, (rows - 1));
    
     int basic_was_initialized = 0;
     while (1) {
@@ -292,10 +318,10 @@ int simplex_method(double** tableau, int rows, int cols) {
         if (pivot_col == -1) {
 			// Optimal solution found
 			double* solution = NULL;
-			printf("Optimal solution found\n");
-			print_matrix(tableau, rows, cols);
-			solution = print_solution_and_get(tableau, basics, rows, cols);
-			apply_gomory_cuts(tableau, rows, cols, basics);
+			fprintf(file,"Optimal solution found\n");
+			print_matrix(tableau, rows, cols, file);
+			solution = print_solution_and_get(tableau, basics, rows, cols,file);
+			apply_gomory_cuts(tableau, rows, cols, basics,file);
 
 			return 1;
         }
@@ -316,6 +342,16 @@ int simplex_method(double** tableau, int rows, int cols) {
     }
 }
 
+void clear_file() {
+    FILE* file = fopen(FILE_NAME, "w");  
+    if (file != NULL) {
+        fclose(file);
+    }
+    else {
+        fprintf(stderr, "Failed to clear file.\n");
+    }
+}
+
 
 int main(int argc, char* argv[]) {
   
@@ -323,13 +359,19 @@ int main(int argc, char* argv[]) {
     int cols = 5;
     double start_time, end_time;
 
+    FILE* file = fopen(FILE_NAME, "a");
+    if (file == NULL) {
+        fprintf(stderr, "Error opening file.\n");
+        return;
+    }
+    omp_set_num_threads(2);
     start_time = omp_get_wtime();
-    // Example tableau: Maximize z = 7x1 + 9x2
-    double tableauData[3][5] = {
-        { -1, 3, 1, 0, 6 },
-        { 7, 1, 0, 1, 35 },
-        { -7, -9, 0, 0, 0 }
-    };
+    clear_file();
+	double tableauData[3][5] = {
+		{ -15, 31, 1, 0, 6 },
+		{ 71, 17, 0, 1, 35 },
+        {-7 , -9, 0, 0, 0 }
+	};
 
     double** tableau = (double**)malloc(rows * sizeof(double*));
     for (int i = 0; i < rows; i++) {
@@ -338,13 +380,16 @@ int main(int argc, char* argv[]) {
             tableau[i][j] = tableauData[i][j];
         }
     }
-    printf("Initial \n");
-    print_matrix(tableau, rows, cols);
-    int optimal = simplex_method(tableau, rows, cols);
+    
+    fprintf(file,"Initial \n");
+    print_matrix(tableau, rows, cols, file);
+   
+    int optimal = simplex_method(tableau, rows, cols,file);
 
     free_matrix(tableau, rows);
     end_time = omp_get_wtime();
-    printf("Time: %.6f seconds\n", end_time - start_time);
+    fprintf(file,"Time: %.6f seconds\n", end_time - start_time);
+    fclose(file);
 
     return 0;
 }
